@@ -16,6 +16,7 @@
 
 package org.wso2.carbon.uuf.maven;
 
+import org.apache.maven.artifact.Artifact;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Resource;
 import org.apache.maven.plugin.BuildPluginManager;
@@ -38,6 +39,8 @@ import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.twdata.maven.mojoexecutor.MojoExecutor.artifactId;
 import static org.twdata.maven.mojoexecutor.MojoExecutor.configuration;
@@ -141,12 +144,22 @@ public class AppMojo implements UUFMojo {
 
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
-        // Remove ".feature" from the artifact ID
+        // Remove ".feature" from the artifact ID.
         String featureName = artifactId.substring(0, (artifactId.length() - ".feature".length()));
         outputDirectoryPath += featureName;
 
+        // Categorize dependencies.
+        @SuppressWarnings("unchecked")
+        Set<Artifact> allDependencies = ((Set<Artifact>) project.getArtifacts());
+        Set<Artifact> uufComponentDependencies = allDependencies.stream()
+                .filter(artifact -> ARTIFACT_TYPE_UUF_COMPONENT.equals(artifact.getClassifier()))
+                .collect(Collectors.toSet());
+        Set<Artifact> uufComponentThemeDependencies = allDependencies.stream()
+                .filter(artifact -> ARTIFACT_TYPE_UUF_THEME.equals(artifact.getClassifier()))
+                .collect(Collectors.toSet());
+
         // 1. Unpack UUF Component dependencies.
-        unpackDependencies(ARTIFACT_TYPE_UUF_COMPONENT, outputDirectoryPath + DIRECTORY_COMPONENTS);
+        unpackDependencies(uufComponentDependencies, outputDirectoryPath + DIRECTORY_COMPONENTS);
         // 2.1. Create "root" component.
         // TODO: 10/19/16 Exclude unnecessary files (e.g. .iml, .DS_Store) when packing the root component
         executeMojo(
@@ -174,7 +187,7 @@ public class AppMojo implements UUFMojo {
             ConfigFileCreator.createOsgiImports(instructions.get(CONFIGURATION_IMPORT_PACKAGE), rootComponentDir);
         }
         // 3. Unpack UUF Theme dependencies.
-        unpackDependencies(ARTIFACT_TYPE_UUF_THEME, outputDirectoryPath + DIRECTORY_THEMES);
+        unpackDependencies(uufComponentThemeDependencies, outputDirectoryPath + DIRECTORY_THEMES);
         // 4. Create dependencies tree.
         executeMojo(
                 plugin(
@@ -188,7 +201,9 @@ public class AppMojo implements UUFMojo {
                         element(name("outputFile"),
                                 outputDirectoryPath + DIRECTORY_COMPONENTS + "/" + FILE_DEPENDENCY_TREE
                         ),
-                        element(name("includes"), "::" + ARTIFACT_TYPE_UUF_COMPONENT + ":")
+                        element(name("includes"), uufComponentDependencies.stream()
+                                .map(artifact -> artifact.getGroupId() + ":" + artifact.getArtifactId() + "::")
+                                .collect(Collectors.joining(",")))
                 ),
                 executionEnvironment(project, session, pluginManager)
         );
@@ -231,7 +246,7 @@ public class AppMojo implements UUFMojo {
         );
     }
 
-    private void unpackDependencies(String classifier, String outputDirectory) throws MojoExecutionException {
+    private void unpackDependencies(Set<Artifact> includes, String outputDirectory) throws MojoExecutionException {
         executeMojo(
                 plugin(
                         groupId("org.apache.maven.plugins"),
@@ -241,7 +256,8 @@ public class AppMojo implements UUFMojo {
                 goal("unpack-dependencies"),
                 configuration(
                         element(name("outputDirectory"), outputDirectory),
-                        element(name("includeClassifiers"), classifier)
+                        element(name("includeArtifactIds"),
+                                includes.stream().map(Artifact::getArtifactId).collect(Collectors.joining(",")))
                 ),
                 executionEnvironment(project, session, pluginManager)
         );
